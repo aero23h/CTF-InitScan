@@ -101,14 +101,18 @@ def conditional_print(*args, **kwargs):
 
 
 def show_nmap_help():
-    result = subprocess.run(['nmap', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    print(result.stdout)
+    print(subprocess.run(['nmap', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout)
 
+def show_dirsearch_help():
+    print(subprocess.run(['dirsearch', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout)
+
+def show_ffuf_help():
+    print(subprocess.run(['ffuf', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout)
 
 def run_dirsearch(arguments):
 
-    if arguments.dirsearch_args:
-        command = ["dirsearch", "-u", f"http://{arguments.target}/"] + arguments.dirsearch_args
+    if isinstance(arguments.dirsearch, list) and len(arguments.dirsearch) > 0:
+        command = ["dirsearch", "-u", f"http://{arguments.target}/"] + arguments.dirsearch
     else:
         command = ["dirsearch", "-u", f"http://{arguments.target}/", "-e", "php,html,txt,"]
 
@@ -118,7 +122,7 @@ def run_dirsearch(arguments):
 
 
 def run_subdomain_ffuf(arguments):
-    if arguments.ffuf_args:
+    if isinstance(arguments.ffuf, list) and len(arguments.ffuf) > 0:
         command = [f"ffuf -u {arguments.target}"] + arguments.ffuf_args
     else:
         default_wordlist = "/usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-20000.txt"
@@ -138,7 +142,7 @@ def ascii_art():
                          ' \\_____|  |_|  |_|       |_____|_| |_|_|\\__|_____/ \\___\\__,_|_| |_|\n' + colors.END
 
 
-def ask_user_for_scans():
+def ask_user_for_scans(arguments):
     options = {
         'f': 'ffuf',
         'd': 'dirsearch',
@@ -146,10 +150,12 @@ def ask_user_for_scans():
         'n': 'none'
     }
 
+    threads = []
+
     print("\nOpen Web-Ports found. Which scan do you want to perform?\n(with presets) ")
-    print("f: ffuf (subdomain scan)")
-    print("d: dirsearch (directories and file scan)")
-    print("fd: both (ffuf and dirsearch)")
+    print("f: Ffuf (subdomain scan)")
+    print("d: Dirsearch (directories and file scan)")
+    print("fd: both (Ffuf and Dirsearch)")
     print("n: none")
 
     choice = input("Choose an option: ")
@@ -157,37 +163,37 @@ def ask_user_for_scans():
     while choice not in options:
         choice = input("Invalid selection. Please select f, d, fd or n: ")
 
-    return options[choice]
+    if options[choice] == 'ffuf':
+        ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,))
+        threads.append(ffuf_thread)
+    elif options[choice] == 'dirsearch':
+        ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,))
+        threads.append(ds_thread)
+    elif options[choice] == 'both':
+        ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,))
+        ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,))
+        threads.append(ffuf_thread)
+        threads.append(ds_thread)
 
+    print("\n")
+    return threads
 
 def main():
     print(ascii_art())
     arguments = parse_args()
-
     threads = []
 
     if check_web_ports(arguments):
-        if arguments.ffuf:
+        if isinstance(arguments.ffuf, list):
             ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,))
             threads.append(ffuf_thread)
 
-        if arguments.dirsearch:
+        if isinstance(arguments.dirsearch, list):
             ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,))
             threads.append(ds_thread)
 
-        if not arguments.ffuf and not arguments.dirsearch:
-            user_choice = ask_user_for_scans()
-            if user_choice == 'ffuf':
-                ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,))
-                threads.append(ffuf_thread)
-            elif user_choice == 'dirsearch':
-                ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,))
-                threads.append(ds_thread)
-            elif user_choice == 'both':
-                ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,))
-                ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,))
-                threads.append(ffuf_thread)
-                threads.append(ds_thread)
+        if not isinstance(arguments.ffuf, list) and not isinstance(arguments.dirsearch, list):
+            threads.extend(ask_user_for_scans(arguments))
 
     if not arguments.no_nmap:
         nmap_thread = threading.Thread(target=nmap_scan, args=(arguments,))
@@ -203,19 +209,29 @@ def main():
 
 def parse_args():
     parser = argparse.ArgumentParser(description='CTF-InitScan')
-    parser.add_argument("-nh", "--nmap-help", action="store_true", help="Show Nmap help")
+    parser.add_argument("-nh", "--nmap-help", action="store_true", help="show Nmap help message and exit")
+    parser.add_argument("-dsh", "--dirsearch-help", action="store_true", help="show Dirsearch help message and exit")
+    parser.add_argument("-fh", "--ffuf-help", action="store_true", help="show Fuff help message and exit")
     parser.add_argument('target', type=str, help='bare URL or IP')
-    parser.add_argument("-na", "--nmap_args", nargs="*", help='specifying nmap-arguments')
-    parser.add_argument("-f", "--ffuf", action="store_true", help="running ffuf if possible")
-    parser.add_argument("-fa", "--ffuf_args", nargs="*", help="specifying ffuf-arguments (without target)")
-    parser.add_argument("-ds", "--dirsearch", action="store_true", help="running dirsearch if possible")
-    parser.add_argument("-dsa","--dirsearch_args", nargs="*", help="specifying dirsearch arguments (without target)")
+    parser.add_argument("-n", "--nmap_args", nargs="*", help='specifying nmap-arguments')
+    parser.add_argument("-f", "--ffuf", nargs="*",help="running Ffuf if possible "
+                                                       "(optional with custom arguments)")
+    parser.add_argument("-ds", "--dirsearch", nargs="*", help="running dirsearch if possible "
+                                                              "(optional with custom arguments)")
     parser.add_argument("--no-nmap", action="store_true", help="Skip Nmap scan")
-    parser.add_argument('-q', '--quiet', action='store_true', help='Suppress unnecessary output')
+    parser.add_argument('-q', '--quiet', action='store_true', help='suppress unnecessary output')
     args, unknown = parser.parse_known_args()
 
     if args.nmap_help:
         show_nmap_help()
+        sys.exit()
+
+    if args.dirsearch_help:
+        show_dirsearch_help()
+        sys.exit()
+
+    if args.ffuf_help:
+        show_ffuf_help()
         sys.exit()
 
     return args
