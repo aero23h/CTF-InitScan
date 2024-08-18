@@ -21,6 +21,7 @@ class TerminalColors(object):
         else:
             self.BLUE = self.CYAN = self.GREEN = self.ORANGE = self.RED = self.END = ""
 
+# runs nmap scan and prints the result depending on the arguments
 def nmap_scan(arguments):
     nmap_args = arguments.nmap_args
 
@@ -80,12 +81,12 @@ def check_web_ports(arguments):
     if open_ports:
         for port in open_ports:
             conditional_print(f"Open web-port found at http://{arguments.target}:{port}", quiet=arguments.quiet)
-            return True
     else:
         conditional_print(f"No open web-ports found on {arguments.target}.", quiet=arguments.quiet)
-        return False
 
+    return open_ports
 
+# loading animation for better look while scanning
 def loading_animation(stop_event, service):
     animation = itertools.cycle(['|', '/', '-', '\\'])
     while not stop_event.is_set():
@@ -94,7 +95,7 @@ def loading_animation(stop_event, service):
         time.sleep(0.1)
     sys.stdout.write(f'\r{service} is running.. complete!\n')
 
-
+# print only if condition set. Used for argument -q
 def conditional_print(*args, **kwargs):
     if not kwargs.pop('quiet', False):
         print(*args, **kwargs)
@@ -109,29 +110,32 @@ def show_dirsearch_help():
 def show_ffuf_help():
     print(subprocess.run(['ffuf', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout)
 
-def run_dirsearch(arguments):
+# runs dirsearch scans for all open web-ports in separate terminals, depending on the arguments
+def run_dirsearch(arguments, ports):
+    for port in ports:
+        if isinstance(arguments.dirsearch, list) and len(arguments.dirsearch) > 0:
+            command = ["dirsearch", "-u", f"http://{arguments.target}:{port}/"] + arguments.dirsearch
+        else:
+            command = ["dirsearch", "-u", f"http://{arguments.target}:{port}/", "-e", "php,html,txt,"]
 
-    if isinstance(arguments.dirsearch, list) and len(arguments.dirsearch) > 0:
-        command = ["dirsearch", "-u", f"http://{arguments.target}/"] + arguments.dirsearch
-    else:
-        command = ["dirsearch", "-u", f"http://{arguments.target}/", "-e", "php,html,txt,"]
+        conditional_print(f"Running command: {' '.join(command)}", quiet=arguments.quiet)
 
-    conditional_print(f"Running command: {' '.join(command)}", quiet=arguments.quiet)
+        subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f"{' '.join(command)}; exec bash"])
 
-    subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f"{' '.join(command)}; exec bash"])
+# runs ffuf scans for all open web-ports in separate terminals, depending on the arguments
+def run_subdomain_ffuf(arguments, ports):
+    for port in ports:
+        if isinstance(arguments.ffuf, list) and len(arguments.ffuf) > 0:
+            command = [f"ffuf -u {arguments.target}:{port}"] + arguments.ffuf_args
+        else:
+            default_wordlist = "/usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-20000.txt"
+            command = ["ffuf", "-w", default_wordlist, "-u", f"{arguments.target}:{port}", "-H", f"HOST:FUZZ.{arguments.target}", "-c"]
 
+        conditional_print(f"Running command: {' '.join(command)}", quiet=arguments.quiet)
 
-def run_subdomain_ffuf(arguments):
-    if isinstance(arguments.ffuf, list) and len(arguments.ffuf) > 0:
-        command = [f"ffuf -u {arguments.target}"] + arguments.ffuf_args
-    else:
-        default_wordlist = "/usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-20000.txt"
-        command = ["ffuf", "-w", default_wordlist, "-u", arguments.target, "-H", f"HOST:FUZZ.{arguments.target}", "-c"]
+        subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f"{' '.join(command)}; exec bash"])
 
-    conditional_print(f"Running command: {' '.join(command)}", quiet=arguments.quiet)
-
-    subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f"{' '.join(command)}; exec bash"])
-
+#just a nice ascii-art :)
 def ascii_art():
     colors = TerminalColors(True)
     return colors.BLUE + '  _____ _______ ______    _____       _ _    _____                 \n' \
@@ -141,8 +145,9 @@ def ascii_art():
                          '| |____   | |  | |        _| |_| | | | | |_ ____) | (_| (_| | | | |\n' \
                          ' \\_____|  |_|  |_|       |_____|_| |_|_|\\__|_____/ \\___\\__,_|_| |_|\n' + colors.END
 
-
-def ask_user_for_scans(arguments):
+# if user has not previously specified whether he wants to use ffuf or dirsearch,
+# he will be asked and the selected operations will be added to the thread list
+def ask_user_for_scans(arguments, ports):
     options = {
         'f': 'ffuf',
         'd': 'dirsearch',
@@ -164,14 +169,14 @@ def ask_user_for_scans(arguments):
         choice = input("Invalid selection. Please select f, d, fd or n: ")
 
     if options[choice] == 'ffuf':
-        ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,))
+        ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,ports))
         threads.append(ffuf_thread)
     elif options[choice] == 'dirsearch':
-        ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,))
+        ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,ports))
         threads.append(ds_thread)
     elif options[choice] == 'both':
-        ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,))
-        ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,))
+        ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,ports))
+        ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,ports))
         threads.append(ffuf_thread)
         threads.append(ds_thread)
 
@@ -182,18 +187,19 @@ def main():
     print(ascii_art())
     arguments = parse_args()
     threads = []
+    open_web_ports = check_web_ports(arguments)
 
-    if check_web_ports(arguments):
+    if len(open_web_ports) > 0:
         if isinstance(arguments.ffuf, list):
-            ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments,))
+            ffuf_thread = threading.Thread(target=run_subdomain_ffuf, args=(arguments, open_web_ports))
             threads.append(ffuf_thread)
 
         if isinstance(arguments.dirsearch, list):
-            ds_thread = threading.Thread(target=run_dirsearch, args=(arguments,))
+            ds_thread = threading.Thread(target=run_dirsearch, args=(arguments, open_web_ports))
             threads.append(ds_thread)
 
         if not isinstance(arguments.ffuf, list) and not isinstance(arguments.dirsearch, list):
-            threads.extend(ask_user_for_scans(arguments))
+            threads.extend(ask_user_for_scans(arguments, open_web_ports))
 
     if not arguments.no_nmap:
         nmap_thread = threading.Thread(target=nmap_scan, args=(arguments,))
