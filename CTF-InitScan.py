@@ -79,11 +79,11 @@ def check_web_ports(arguments):
         sock.close()
 
     # check for manually added port
-    if arguments.add_port: open_ports.extend(arguments.add_port)
+    if isinstance(arguments.add_port, list) and arguments.add_port: open_ports.extend(arguments.add_port)
 
     if open_ports:
         for port in open_ports:
-            if port in arguments.add_port:
+            if isinstance(arguments.add_port, list) and port in arguments.add_port:
                 conditional_print(f"Manually added port: {port}", quiet=arguments.quiet)
             else:
                 conditional_print(f"Open web-port found at http://{arguments.target}:{port}", quiet=arguments.quiet)
