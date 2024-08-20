@@ -68,7 +68,7 @@ def nmap_scan(arguments):
 
 # quick check for available web-ports
 def check_web_ports(arguments):
-    ports = [80, 443, 8080, 1234]
+    ports = [80, 443, 8080, 8888, 1234]
     open_ports = []
     for port in ports:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -78,9 +78,15 @@ def check_web_ports(arguments):
             open_ports.append(port)
         sock.close()
 
+    # check for manually added port
+    if arguments.add_port: open_ports.extend(arguments.add_port)
+
     if open_ports:
         for port in open_ports:
-            conditional_print(f"Open web-port found at http://{arguments.target}:{port}", quiet=arguments.quiet)
+            if port in arguments.add_port:
+                conditional_print(f"Manually added port: {port}", quiet=arguments.quiet)
+            else:
+                conditional_print(f"Open web-port found at http://{arguments.target}:{port}", quiet=arguments.quiet)
     else:
         conditional_print(f"No open web-ports found on {arguments.target}.", quiet=arguments.quiet)
 
@@ -99,7 +105,6 @@ def loading_animation(stop_event, service):
 def conditional_print(*args, **kwargs):
     if not kwargs.pop('quiet', False):
         print(*args, **kwargs)
-
 
 def show_nmap_help():
     print(subprocess.run(['nmap', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout)
@@ -126,10 +131,10 @@ def run_dirsearch(arguments, ports):
 def run_subdomain_ffuf(arguments, ports):
     for port in ports:
         if isinstance(arguments.ffuf, list) and len(arguments.ffuf) > 0:
-            command = [f"ffuf -u {arguments.target}:{port}"] + arguments.ffuf_args
+            command = [f"ffuf -u http://{arguments.target}:{port}", "-H", f"HOST:FUZZ.{arguments.target}"] + arguments.ffuf_args
         else:
-            default_wordlist = "/usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-20000.txt"
-            command = ["ffuf", "-w", default_wordlist, "-u", f"{arguments.target}:{port}", "-H", f"HOST:FUZZ.{arguments.target}", "-c"]
+            default_wordlist = "/usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-110000.txt"
+            command = ["ffuf", "-w", default_wordlist, "-u", f"http://{arguments.target}:{port}", "-H", f"HOST:FUZZ.{arguments.target}","-c", "-mc 200 -ac"]
 
         conditional_print(f"Running command: {' '.join(command)}", quiet=arguments.quiet)
 
@@ -226,6 +231,7 @@ def parse_args():
                                                               "(optional with custom arguments)")
     parser.add_argument("--no-nmap", action="store_true", help="Skip Nmap scan")
     parser.add_argument('-q', '--quiet', action='store_true', help='suppress unnecessary output')
+    parser.add_argument("-p", "--add_port", nargs="*", help='add a extra port to scan')
     args, unknown = parser.parse_known_args()
 
     if args.nmap_help:
